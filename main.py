@@ -1,31 +1,30 @@
+# CSV parser imports
 import pandas as pd
+
+# Coordinate transformation imports
 import pyproj
 from pyproj import Transformer
-import json
+
+# GUI imports
 import plotly.express as px
 import PySimpleGUI as sg
-import os
+
+# DXF parser imports
+import ezdxf
+from ezdxf.addons import geo
+from ezdxf.math import Vec3
+
+# system imports
 import sys
-
-
-def resource_path(relative_path):
-    """Get absolute path to resource, works for dev and for PyInstaller"""
-    try:
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-
-    return os.path.join(base_path, relative_path)
-
+import json
 
 # Take a CSV of polygon points, convert them into WGS84 coordinates and export as geojson
 
 
-def create_geojson(file, epsg):
+def csv_to_geojson(csv_file, epsg):
     # Setup variables
-    file_name = file.split(".")[0]
-    df = pd.read_csv(file)
+    file_name = csv_file.split(".")[0]
+    df = pd.read_csv(csv_file)
     df.columns = ["X", "Y", "Z", "R", "G", "B"]
     transformer = Transformer.from_crs(epsg, 4326)
     cad_dict = {}
@@ -74,6 +73,55 @@ def create_geojson(file, epsg):
     return geojson
 
 
+# Take a DXF of polygons, convert them into WGS84 coordinates and export as geojson
+
+
+def dxf_to_geojson(dxf_file, epsg):
+    file_name = dxf_file.split(".")[0]
+    geojson = {"type": "FeatureCollection", "features": []}
+
+    # Verify DXF validity
+    try:
+        doc = ezdxf.readfile(dxf_file)
+    except IOError:
+        print(f"Not a DXF file or a generic I/O error.")
+        sys.exit(1)
+    except ezdxf.DXFStructureError:
+        print(f"Invalid or corrupted DXF file.")
+        sys.exit(2)
+
+    # Enter DXF Modelspace
+    msp = doc.modelspace()
+
+    # Iterate polylines in DXF
+    for polyline in msp.query("POLYLINE"):
+        geo_proxy = geo.proxy(polyline)
+
+        # Grab the polyline IDs
+        id = str(polyline.dxf.layer).split("%%")[1]
+
+        # Convert from input CRS to WGS84
+        ct = Transformer.from_crs(epsg, 4326, always_xy=True)
+
+        # Apply the coordinate transformation
+        geo_proxy.apply(lambda v: Vec3(ct.transform(v.x, v.y)))
+
+        # Add polygon geojson to FeatureCollection
+        geojson["features"].append(
+            {
+                "type": "Feature",
+                "properties": {"id": id},
+                "geometry": geo_proxy.__geo_interface__,
+            }
+        )
+
+    # Write full geojson to file
+    with open(file_name + ".json", "w") as f:
+        json.dump(geojson, f, indent=2)
+
+    return geojson
+
+
 # Display polygons over a satellite map to verify location
 
 
@@ -113,23 +161,27 @@ def show_map(geojson):
     fig.show()
 
 
+# GUI Code ***********************************************************************
+
 sg.theme("DarkAmber")
 
-epsg_file = resource_path("epsg-sp-nad83.csv")
-epsg_codes = pd.read_csv(epsg_file)
-
-file = [[sg.In(size=(30, 1), enable_events=True, key="CSV_FILE"), sg.FileBrowse()]]
+file = [[sg.In(size=(30, 1), enable_events=True, key="FILE"), sg.FileBrowse()]]
 status = [
     (""),
     ("Please select a file before converting."),
     ("Please input EPSG Code before converting."),
     ("GeoJSON file exported"),
     ("Map is displaying in browser window"),
+    ("Incorrect File Format."),
 ]
 epsg = [[sg.In(size=(25, 1), enable_events=True, key="_EPSG_")]]
 
 layout = [
-    [sg.Text("Points CSV File", size=(30, 1), font="Lucida", justification="left")],
+    [
+        sg.Text(
+            "Points CSV or DXF File", size=(30, 1), font="Lucida", justification="left"
+        )
+    ],
     [
         sg.Text(
             "*files will be exported in the same folder as the input file.",
@@ -160,7 +212,7 @@ layout = [
     ],
     [sg.Button("Ok"), sg.Button("Cancel"), sg.Button("Reset")],
 ]
-window = sg.Window("CSV to GeoJSON", layout, resizable=True)
+window = sg.Window("Convert to GeoJSON", layout, resizable=True)
 
 while True:
     event, values = window.read()
@@ -170,34 +222,51 @@ while True:
     if event == "Cancel":
         raise SystemExit
     if event == "Reset":
-        window["CSV_FILE"].Update(value="")
+        window["FILE"].Update(value="")
         window["_EPSG_"].Update(value="")
+        window["INDICATOR"].update(value=status[0])
 
-    if event == "Ok" and values["CSV_FILE"] == "":
+    if event == "Ok" and values["FILE"] == "":
         window["INDICATOR"].update(value=status[1])
-    elif event == "Ok" and values["CSV_FILE"] and values["_EPSG_"] == "":
+    elif event == "Ok" and values["FILE"] and values["_EPSG_"] == "":
         window["INDICATOR"].update(value=status[2])
     elif (
         event == "Ok"
-        and values["CSV_FILE"]
+        and values["FILE"]
         and values["_EPSG_"]
         and values["CB_MAP"] == False
     ):
         window["INDICATOR"].update(value=status[0])
         try:
-            create_geojson(values["CSV_FILE"], values["_EPSG_"])
-            window["INDICATOR"].update(value=status[3])
+            if values["FILE"].endswith(".csv"):
+                csv_to_geojson(values["FILE"], values["_EPSG_"])
+                window["INDICATOR"].update(value=status[3])
+            elif values["FILE"].endswith(".dxf"):
+                dxf_to_geojson(values["FILE"], values["_EPSG_"])
+                window["INDICATOR"].update(value=status[3])
+            else:
+                window["INDICATOR"].update(value=status[5])
         except pyproj.exceptions.CRSError:
             error = "Invalid/Unsupported EPSG Code"
             window["INDICATOR"].update(value=error)
     elif (
         event == "Ok"
-        and values["CSV_FILE"]
+        and values["FILE"]
         and values["_EPSG_"]
         and values["CB_MAP"] == True
     ):
         window["INDICATOR"].update(value=status[0])
-        geojson = create_geojson(values["CSV_FILE"], values["_EPSG_"])
-        show_map(geojson)
-        window["INDICATOR"].update(value=status[4])
+        try:
+            if values["FILE"].endswith(".csv"):
+                geojson = csv_to_geojson(values["FILE"], values["_EPSG_"])
+                window["INDICATOR"].update(value=status[4])
+            elif values["FILE"].endswith(".dxf"):
+                geojson = dxf_to_geojson(values["FILE"], values["_EPSG_"])
+                show_map(geojson)
+                window["INDICATOR"].update(value=status[4])
+            else:
+                window["INDICATOR"].update(value=status[5])
+        except pyproj.exceptions.CRSError:
+            error = "Invalid/Unsupported EPSG Code"
+            window["INDICATOR"].update(value=error)
 window.close()
