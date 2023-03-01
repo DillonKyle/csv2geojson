@@ -23,7 +23,7 @@ import json
 
 def csv_to_geojson(csv_file, epsg):
     # Setup variables
-    file_name = csv_file.split(".")[0]
+    file_name = csv_file.split(".csv")[0]
     df = pd.read_csv(csv_file)
     df.columns = ["X", "Y", "Z", "R", "G", "B"]
     transformer = Transformer.from_crs(epsg, 4326)
@@ -77,7 +77,9 @@ def csv_to_geojson(csv_file, epsg):
 
 
 def dxf_to_geojson(dxf_file, epsg):
-    file_name = dxf_file.split(".")[0]
+    file_name = dxf_file.split(".dxf")[0]
+    
+    print(file_name)
     geojson = {"type": "FeatureCollection", "features": []}
 
     # Verify DXF validity
@@ -130,7 +132,7 @@ def show_map(geojson):
     point = geojson["features"][0]["geometry"]["coordinates"][0][0]
 
     # Map server URL
-    s = "https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v9/tiles/256/{z}/{x}/{y}@2x?access_token=pk.eyJ1Ijoia2VzcHJ5ZHJvbmVzIiwiYSI6ImZEVXNDVHMifQ.yOzxCocHxL7uQqVw3ghuPQ"
+    s = "GET FROM ENV"
 
     # Create Map Plot
     fig = px.scatter_mapbox(lat=[point[1]], lon=[point[0]]).update_layout(
@@ -259,6 +261,7 @@ while True:
         try:
             if values["FILE"].endswith(".csv"):
                 geojson = csv_to_geojson(values["FILE"], values["_EPSG_"])
+                show_map(geojson)
                 window["INDICATOR"].update(value=status[4])
             elif values["FILE"].endswith(".dxf"):
                 geojson = dxf_to_geojson(values["FILE"], values["_EPSG_"])

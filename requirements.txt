@@ -1,0 +1,5 @@
+pandas
+pyproj
+plotly
+PySimpleGUI
+ezdxf
